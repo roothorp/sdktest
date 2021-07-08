@@ -1,31 +1,24 @@
 package com.couchbase.sdktests;
 
-import static com.couchbase.client.java.query.QueryOptions.queryOptions;
-import static com.couchbase.client.java.kv.MutateInSpec.upsert;
-
-import java.time.Duration;
-
-import com.couchbase.client.core.Core;
+import com.couchbase.client.core.env.SecurityConfig;
 import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
 import com.couchbase.client.java.ClusterOptions;
 import com.couchbase.client.java.Collection;
 import com.couchbase.client.java.analytics.AnalyticsResult;
-import com.couchbase.client.java.json.JsonArray;
+import com.couchbase.client.java.env.ClusterEnvironment;
 import com.couchbase.client.java.json.JsonObject;
 import com.couchbase.client.java.kv.MutationResult;
-import com.couchbase.client.java.manager.search.AsyncSearchIndexManager;
-import com.couchbase.client.java.manager.search.SearchIndex;
-import com.couchbase.client.java.manager.search.SearchIndexManager;
-import com.couchbase.client.java.query.QueryOptions;
-import com.couchbase.client.java.search.SearchQuery;
-import com.couchbase.client.java.search.result.SearchResult;
 
-import java.io.BufferedInputStream;
 import java.io.FileInputStream;
-import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+
+import static com.couchbase.client.java.kv.MutateInSpec.upsert;
 
 public class Run {
 
@@ -61,42 +54,44 @@ public class Run {
             }
         }
 
-        if (connection == "") {
+        if (connection.equals("")) {
             System.err.println("-connection is a required argument");
             System.exit(1);
         }
-        if (username == "") {
+        if (username.equals("")) {
             System.err.println("-username is a required argument");
             System.exit(1);
         }
-        if (password == "") {
+        if (password.equals("")) {
             System.err.println("-password is a required argument");
             System.exit(1);
         }
-        if (bucketName == "") {
+        if (bucketName.equals("")) {
             System.err.println("-bucket is a required argument");
             System.exit(1);
         }
 
         // set up cluster login with username/password
-        ClusterOptions opt =  ClusterOptions.clusterOptions(username, password);
+        ClusterEnvironment env;
         // check if CA file is provided
-        if (CAfile != "") {
-            // read cert
-            FileInputStream fis = new FileInputStream(CAfile);
-            BufferedInputStream bis = new BufferedInputStream(fis);
-           
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            while (bis.available() > 0) {
-                Certificate cert = cf.generateCertificate(bis);
-                System.out.println(cert.toString());
-             }
-             
+        if (!CAfile.equals("")) {
             // add cert to cluster options
+            List<X509Certificate> certs = new ArrayList<>();
+            FileInputStream fis = new FileInputStream(CAfile);
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            while (fis.available() > 0) {
+                X509Certificate cert = (X509Certificate) cf.generateCertificate(fis);
+                certs.add(cert);
+            }
+            fis.close();
+            env = ClusterEnvironment.builder().securityConfig(SecurityConfig.enableTls(true).trustCertificates(certs)).build();
+        } else {
+            env = ClusterEnvironment.builder().build();
         }
 
         // try and connect to cluster
-        Cluster cluster = Cluster.connect(connection, opt);
+
+        Cluster cluster = Cluster.connect(connection, ClusterOptions.clusterOptions(username, password).environment(env));
         cluster.waitUntilReady(Duration.ofSeconds(5));
 
         // try and connect to bucket
@@ -104,15 +99,12 @@ public class Run {
         bucket.waitUntilReady(Duration.ofSeconds(5));
         Collection collection = bucket.defaultCollection();
 
-        // create index
-        // cluster.query("CREATE PRIMARY INDEX ON ?", queryOptions().parameters(JsonArray.from(bucketName)));
-
-        // upsert a doc inc. a subdoc
+        // upsert a doc
         JsonObject content = JsonObject.create().put("author", "mike").put("title", "My Blog Post 1");
         MutationResult mutationResult = collection.upsert("test-key", content);
         System.out.println("upsert done");
 
-        // mutate a subdoc
+        // subdoc mutate
         collection.mutateIn("test-key", Arrays.asList(upsert("author", "steve")));
         System.out.println("subdoc mutate done");
 
@@ -124,12 +116,12 @@ public class Run {
         AnalyticsResult analyticsResult = cluster.analyticsQuery("select \"hello\" as greeting");
         System.out.println("analytics query done");
 
-        // run an fts search
-
-        SearchResult searchResult = cluster.searchQuery("index", SearchQuery.queryString("test"));
-        System.out.println("fts done");
+        // run an fts search (TODO: needs index)
+        //SearchResult searchResult = cluster.searchQuery("index", SearchQuery.queryString("test"));
+        //System.out.println("fts done");
 
         cluster.disconnect();
+        env.shutdown();
 
     }
 }

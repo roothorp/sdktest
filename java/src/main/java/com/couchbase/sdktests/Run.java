@@ -23,6 +23,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 
 import static com.couchbase.client.java.kv.MutateInSpec.upsert;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -49,14 +50,13 @@ public class Run {
         String password = cmd.getOptionValue("password");
         // bucket name
         String bucketName = cmd.getOptionValue("bucket");
-        // CA file (optional)
-        String caFile = cmd.getOptionValue("cafile");
 
         // set up cluster login with username/password
         ClusterEnvironment env;
         // check if CA file is provided
         if (cmd.hasOption("cafile")) {
             // add cert to cluster options
+            String caFile = cmd.getOptionValue("cafile");
             List<X509Certificate> certs = new ArrayList<>();
             FileInputStream fis = new FileInputStream(caFile);
             CertificateFactory cf = CertificateFactory.getInstance("X.509");
@@ -97,7 +97,7 @@ public class Run {
         System.out.println("analytics query done");
 
         // create fts index
-        String indexName = "index";
+        String indexName = "idx-" + UUID.randomUUID().toString().substring(0, 8);
         cluster.searchIndexes().upsertIndex(new SearchIndex(indexName, bucketName));
 
         // try to run an fts search, waiting for index to be created
@@ -112,8 +112,8 @@ public class Run {
         System.out.println("fts done");
 
         // create view design doc
-        String ddName = "designDoc";
-        String viewName = "testView";
+        String ddName = "dd-" + UUID.randomUUID().toString().substring(0, 8);
+        String viewName = "view-" + UUID.randomUUID().toString().substring(0, 8);
         DesignDocument dd = new DesignDocument(ddName).putView(viewName, "function(doc,meta) { emit(meta.id, doc) }");
         bucket.viewIndexes().upsertDesignDocument(dd, DesignDocumentNamespace.PRODUCTION);
 

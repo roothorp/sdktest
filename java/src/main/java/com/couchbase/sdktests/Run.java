@@ -8,9 +8,13 @@ import com.couchbase.client.java.Collection;
 import com.couchbase.client.java.env.ClusterEnvironment;
 import com.couchbase.client.java.json.JsonObject;
 import com.couchbase.client.java.manager.search.SearchIndex;
-import com.couchbase.client.java.manager.search.SearchIndexManager;
+import com.couchbase.client.java.manager.view.DesignDocument;
 import com.couchbase.client.java.search.SearchQuery;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import com.couchbase.client.java.view.DesignDocumentNamespace;
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.DefaultParser;
+import org.apache.commons.cli.Option;
+import org.apache.commons.cli.Options;
 
 import java.io.FileInputStream;
 import java.security.cert.CertificateFactory;
@@ -21,65 +25,40 @@ import java.util.Arrays;
 import java.util.List;
 
 import static com.couchbase.client.java.kv.MutateInSpec.upsert;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 public class Run {
 
     public static void main(String... args) throws Exception {
 
-        // Take flags for options:
+        Options options = new Options();
+        options.addOption(Option.builder().longOpt("connection").hasArg().required().desc("Connection string for Couchbase cluster").build());
+        options.addOption(Option.builder().longOpt("username").hasArg().required().desc("Username for Couchbase cluster").build());
+        options.addOption(Option.builder().longOpt("password").hasArg().required().desc("Password for Couchbase cluster").build());
+        options.addOption(Option.builder().longOpt("bucket").hasArg().required().desc("Bucket on which to run").build());
+        options.addOption(Option.builder().longOpt("cafile").hasArg().desc("CA File Path").build());
+
+        CommandLine cmd = new DefaultParser().parse(options, args);
+
+        // options:
         // connection string
-        String connection = "";
+        String connection = cmd.getOptionValue("connection");
         // username
-        String username = "";
+        String username = cmd.getOptionValue("username");
         // password
-        String password = "";
+        String password = cmd.getOptionValue("password");
         // bucket name
-        String bucketName = "";
+        String bucketName = cmd.getOptionValue("bucket");
         // CA file (optional)
-        String cafile = "";
-
-        for (String arg : args) {
-            if (arg.startsWith("-connection=")) {
-                connection = arg.replace("-connection=", "");
-            }
-            if (arg.startsWith("-username=")) {
-                username = arg.replace("-username=", "");
-            }
-            if (arg.startsWith("-password=")) {
-                password = arg.replace("-password=", "");
-            }
-            if (arg.startsWith("-bucket=")) {
-                bucketName = arg.replace("-bucket=", "");
-            }
-            if (arg.startsWith("-cafile=")) {
-                cafile = arg.replace("-cafile=", "");
-            }
-        }
-
-        if (connection.equals("")) {
-            System.err.println("-connection is a required argument");
-            System.exit(1);
-        }
-        if (username.equals("")) {
-            System.err.println("-username is a required argument");
-            System.exit(1);
-        }
-        if (password.equals("")) {
-            System.err.println("-password is a required argument");
-            System.exit(1);
-        }
-        if (bucketName.equals("")) {
-            System.err.println("-bucket is a required argument");
-            System.exit(1);
-        }
+        String caFile = cmd.getOptionValue("cafile");
 
         // set up cluster login with username/password
         ClusterEnvironment env;
         // check if CA file is provided
-        if (!cafile.equals("")) {
+        if (cmd.hasOption("cafile")) {
             // add cert to cluster options
             List<X509Certificate> certs = new ArrayList<>();
-            FileInputStream fis = new FileInputStream(cafile);
+            FileInputStream fis = new FileInputStream(caFile);
             CertificateFactory cf = CertificateFactory.getInstance("X.509");
             while (fis.available() > 0) {
                 X509Certificate cert = (X509Certificate) cf.generateCertificate(fis);
@@ -132,11 +111,17 @@ public class Run {
         }
         System.out.println("fts done");
 
-        // views?
+        // create view design doc
+        String ddName = "designDoc";
+        String viewName = "testView";
+        DesignDocument dd = new DesignDocument(ddName).putView(viewName, "function(doc,meta) { emit(meta.id, doc) }");
+        bucket.viewIndexes().upsertDesignDocument(dd, DesignDocumentNamespace.PRODUCTION);
+
+        bucket.viewQuery(ddName, viewName);
+        System.out.println("views done");
 
         cluster.disconnect();
         env.shutdown();
-
     }
 
     private static void runWithRetry(Duration timeout, Runnable task) throws Throwable {
@@ -150,7 +135,7 @@ public class Run {
                 task.run();
                 return;
             } catch (Throwable t) {
-                System.out.println("Retrying FTS (waiting for index)"); // don't need stack trace
+                System.out.println("Retrying FTS (waiting for index)");
                 deferred = t;
             }
         } while (System.nanoTime() - startNanos < timeout.toNanos());

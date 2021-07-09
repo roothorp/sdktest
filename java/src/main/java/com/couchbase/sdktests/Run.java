@@ -5,10 +5,12 @@ import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
 import com.couchbase.client.java.ClusterOptions;
 import com.couchbase.client.java.Collection;
-import com.couchbase.client.java.analytics.AnalyticsResult;
 import com.couchbase.client.java.env.ClusterEnvironment;
 import com.couchbase.client.java.json.JsonObject;
-import com.couchbase.client.java.kv.MutationResult;
+import com.couchbase.client.java.manager.search.SearchIndex;
+import com.couchbase.client.java.manager.search.SearchIndexManager;
+import com.couchbase.client.java.search.SearchQuery;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import java.io.FileInputStream;
 import java.security.cert.CertificateFactory;
@@ -34,7 +36,7 @@ public class Run {
         // bucket name
         String bucketName = "";
         // CA file (optional)
-        String CAfile = "";
+        String cafile = "";
 
         for (String arg : args) {
             if (arg.startsWith("-connection=")) {
@@ -50,7 +52,7 @@ public class Run {
                 bucketName = arg.replace("-bucket=", "");
             }
             if (arg.startsWith("-cafile=")) {
-                CAfile = arg.replace("-cafile=", "");
+                cafile = arg.replace("-cafile=", "");
             }
         }
 
@@ -74,10 +76,10 @@ public class Run {
         // set up cluster login with username/password
         ClusterEnvironment env;
         // check if CA file is provided
-        if (!CAfile.equals("")) {
+        if (!cafile.equals("")) {
             // add cert to cluster options
             List<X509Certificate> certs = new ArrayList<>();
-            FileInputStream fis = new FileInputStream(CAfile);
+            FileInputStream fis = new FileInputStream(cafile);
             CertificateFactory cf = CertificateFactory.getInstance("X.509");
             while (fis.available() > 0) {
                 X509Certificate cert = (X509Certificate) cf.generateCertificate(fis);
@@ -89,19 +91,18 @@ public class Run {
             env = ClusterEnvironment.builder().build();
         }
 
-        // try and connect to cluster
-
+        // connect to cluster
         Cluster cluster = Cluster.connect(connection, ClusterOptions.clusterOptions(username, password).environment(env));
         cluster.waitUntilReady(Duration.ofSeconds(5));
 
-        // try and connect to bucket
+        // connect to bucket & default collection
         Bucket bucket = cluster.bucket(bucketName);
         bucket.waitUntilReady(Duration.ofSeconds(5));
         Collection collection = bucket.defaultCollection();
 
         // upsert a doc
         JsonObject content = JsonObject.create().put("author", "mike").put("title", "My Blog Post 1");
-        MutationResult mutationResult = collection.upsert("test-key", content);
+        collection.upsert("test-key", content);
         System.out.println("upsert done");
 
         // subdoc mutate
@@ -113,15 +114,46 @@ public class Run {
         System.out.println("n1ql query done");
 
         // run an analytics query
-        AnalyticsResult analyticsResult = cluster.analyticsQuery("select \"hello\" as greeting");
+        cluster.analyticsQuery("select \"hello\" as greeting");
         System.out.println("analytics query done");
 
-        // run an fts search (TODO: needs index)
-        //SearchResult searchResult = cluster.searchQuery("index", SearchQuery.queryString("test"));
-        //System.out.println("fts done");
+        // create fts index
+        String indexName = "index";
+        cluster.searchIndexes().upsertIndex(new SearchIndex(indexName, bucketName));
+
+        // try to run an fts search, waiting for index to be created
+        try {
+            runWithRetry(Duration.ofSeconds(5), () -> {
+                cluster.searchQuery(indexName, SearchQuery.queryString("test"));
+            });
+        } catch (Throwable e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
+        System.out.println("fts done");
+
+        // views?
 
         cluster.disconnect();
         env.shutdown();
 
+    }
+
+    private static void runWithRetry(Duration timeout, Runnable task) throws Throwable {
+        long startNanos = System.nanoTime();
+        Throwable deferred = null;
+        do {
+            if (deferred != null) {
+                MILLISECONDS.sleep(250);
+            }
+            try {
+                task.run();
+                return;
+            } catch (Throwable t) {
+                System.out.println("Retrying FTS (waiting for index)"); // don't need stack trace
+                deferred = t;
+            }
+        } while (System.nanoTime() - startNanos < timeout.toNanos());
+        throw deferred;
     }
 }
